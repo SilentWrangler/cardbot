@@ -50,6 +50,9 @@ class Game:
         self.hands = [Hand(p) for p in self.players]
         self.scores = [0 for p in self.players]
         await self.nextturn(0)
+    async def cancel(self):
+        self.finished = True
+        await self.channel.send("Игра отменена")
     async def nextturn(self,iters):
         if iters==len(self.players):
             result = [player.mention+': {0}'.format(score) for player,score
@@ -197,6 +200,11 @@ async def on_message(message):
             game.started==False and
             game.initiator==message.author):
                 await game.start()
+        elif message.content.lower().startswith('отбой'):
+            if (game is not None and
+            game.started==False and
+            game.initiator==message.author):
+                await game.cancel()
         elif message.content.lower().startswith('тяну'):
             if (game is not None
             and game.started==True
