@@ -1,6 +1,6 @@
 import os
 
-from random import randint
+from random import randint, choice
 
 from sqlalchemy import create_engine, Column, Integer, String, Sequence
 from sqlalchemy.ext.declarative import declarative_base
@@ -47,6 +47,7 @@ class Adventurer(Base):
     life = Column(Integer)
     luck = Column(Integer)
     wealth = Column(Integer)
+    exp = Column(Integer)
     #--------------
     def get_stat(self, stat):
         stats = {
@@ -75,9 +76,9 @@ class Adventurer(Base):
     def profile_russian(self):
         return (
             f'**{self.name}**\n'
-            f'Жизнь: {self.life} Удача: {self.luck} Богатство: {self.wealth}\n'
+            f'Жизнь: {self.life} Удача: {self.luck} Богатство: {self.wealth} Опыт: {self.exp}\n'
             f'============ОПИСАНИЕ=============\n'
-            f'{self.decription}\n'
+            f'{self.description}\n'
             f'=========ХАРАКТЕРИСТИКИ==========\n'
             f'Мощь: {self.might}\n'
             f'  Сила: {self.strength}\n'
@@ -101,13 +102,51 @@ session = sessionmaker(bind=engine)
 
 
 class Room:
-    pass
-
+    seeds = []
+    with open('seeds.csv') as f:
+        seeds = f.readlines()
+    active_check_stats = ['Сила','Выносливость','Ловкость','Скорость','Логика','Креативность']
+    secret_reveal_stats = ['Внимательность', 'Эмпатия']
+    @classmethod
+    def random_challenge(cls):
+        dc = randint(7,14)
+        stat = choice(cls.active_check_stats)
+        seed = choice(cls.seeds)
+        return f'{stat} {dc} {seed}'
+    @classmethod
+    def random_secret(cls):
+        dc = randint(7,14)
+        stat = choice(cls.secret_reveal_stats)
+        seed = choice(cls.seeds)
+        return f'{stat} {dc} {seed}'
+    @classmethod
+    def random(cls):
+        r = Room()
+        r.seeds = [choice(cls.seeds), choice(cls.seeds), choice(cls.seeds)]
+        r.challenges = [Room.random_challenge(), Room.random_challenge()]
+        r.secrets = []
+        for i in range(randint(0,2)):
+            r.secrets.append(cls.random_secret())
+        return r
+    def public_message(self):
+        return (
+            f'{"".join(self.seeds)}'
+            'Проверки:\n'
+            f'{"".join(self.challenges)}'
+            )
+    def gm_message(self):
+        return (
+            f'{"".join(self.seeds)}'
+            'Проверки:\n'
+            f'{"".join(self.challenges)}'
+            'Секреты:\n'
+            f'{"".join(self.secrets)}'
+            )
 
 class AdventureManager:
     def __init__(self, channel):
         self.channel = channel
-        self.heroes = []
+        self.heroes = dict()
 
 
 
