@@ -6,9 +6,9 @@ import requests
 from io import BytesIO
 from dotenv import load_dotenv
 from PIL import Image
-from random import shuffle
+from random import shuffle, randint
 
-
+from adventures import HeroCreator, Adventurer, Room
 
 
 load_dotenv(override= True)
@@ -17,10 +17,10 @@ CARDS = int(os.getenv('CARDS_ID'))
 THEORIES = int(os.getenv('THEORIES_ID'))
 GMNOTES = int(os.getenv("GMNOTES_ID"))
 INGAME = int(os.getenv('INGAME_ID'))
+ADVENTURE = int(os.getenv('ADVENTURE_ID'))
+OWNER = int(os.getenv('OWNER_ID'))
 
-
-
-
+HERO_LIMIT = 10
 
 
 class Game:
@@ -172,11 +172,29 @@ class NotFound(Exception):
 
 
 
-client = discord.Client()
+client = discord.Client(intents = discord.Intents.default())
 game  =None
+
+class Hooks:
+    creation_hook = None
+    adventure_hook = None
+
+class Adv:
+    creator = None
+    num_test_msg = None
+    hero_picker_msgs = {}
+    hero_picker_stats = {}
+
 @client.event
 async def on_ready():
     print("Card-bot: Successfully logged in.",flush=True)
+    adv_channel = client.get_channel(ADVENTURE)
+    hooks = await adv_channel.webhooks()
+    for hook in hooks:
+        if hook.name == 'Adventure':
+            Hooks.adventure_hook = hook
+        if hook.name == 'Hero Creation':
+            Hooks.creation_hook = hook
 
 
 @client.event
@@ -225,6 +243,154 @@ async def on_message(message):
                                                ' 1 — самая левая')
     if message.channel.id==GMNOTES:
         pass
+    if message.channel.id==ADVENTURE:
+        if message.author.id == OWNER and message.content.lower().startswith('webhook test'):
+            await Hooks.creation_hook.send('Test successful')
+            await Hooks.adventure_hook.send('Test successful')
+        if message.author.id == OWNER and message.content.lower().startswith('reaction test'):
+            await message.add_reaction('0️⃣')
+            msg = await Hooks.creation_hook.send('reaction number: - ', wait = True)
+            print(f'===just sent===\n{msg}')
+            Adv.num_test_msg = msg
+            print(f'===before react===\n{Adv.num_test_msg}')
+        if message.content.lower().startswith('создать героя'):
+            already_owned = Adventurer.get(owner_id = message.author.id).count()
+            if already_owned>=HERO_LIMIT:
+                await Hooks.creation_hook.send(f'Лимит героев: {HERO_LIMIT}, Уже в наличии: {already_owned}')
+            else:
+                if Adv.creator is not None and not Adv.creator.done:
+                    await Hooks.creation_hook.send(f'Кто-то (может даже ты) уже создаёт героя. Подожди своей очереди.')
+                else:
+                    Adv.creator = HeroCreator(message.author, Hooks.creation_hook)
+                    await Adv.creator.start()
+        elif message.content.lower().startswith('отмена'):
+            if Adv.creator is not None and not Adv.creator.done and Adv.creator.user == message.author:
+                Adv.creator = None
+                await Hooks.creation_hook.send(f'Создание героя отменено.')
+        elif Adv.creator is not None and not Adv.creator.done and Adv.creator.user.id == message.author.id:
+            print(Adv.creator.stage)
+            await Adv.creator.add_text(message.content)
+        elif message.content.lower().startswith('список героев'):
+            heroes = Adventurer.get()
+            if heroes.count()==0:
+                await Hooks.adventure_hook.send('Герои отсутствуют!')
+            else:
+                msg = ''
+                for hero in heroes.all():
+                    user = await client.fetch_user(hero.owner_id)
+                    msg += f'{hero.name} ({user.display_name})\n'
+                await Hooks.adventure_hook.send(msg)
+        elif message.content.lower().startswith('герой:'):
+            name = message.content[7:].strip()
+            heroes = Adventurer.name_search(name)
+            if heroes.count()==0:
+                await Hooks.adventure_hook.send('Герой не найден!')
+            elif heroes.count()==1:
+                await Hooks.adventure_hook.send(f'{heroes.first().profile_russian()}')
+            else:
+                msg = 'Найдено несколько, уточните:\n'
+                for hero in heroes.all():
+                    user = await client.fetch_user(hero.owner_id)
+                    msg += f'{hero.name} ({user.display_name})\n'
+                await Hooks.adventure_hook.send(msg)
+        elif (message.content.lower().startswith('проверка ') or
+        message.content.lower().startswith('ролл ') or
+        message.content.lower().startswith('roll ')):
+            attr = message.content.lower().split()[1]
+            russian_to_tech = {
+                'мощь':'might',
+                'сила':'strength',
+                'выносливость':'endurance',
+                'подвижность':'mobility',
+                'ловкость':'dexterity',
+                'скорость':'speed',
+                'разум':'mind',
+                'внимательность':'perception',
+                'логика':'logic',
+                'душа':'soul',
+                'эмпатия':'empathy',
+                'креативность':'creativity',
+                'фэйт': 'fate',
+                }
+            tech = russian_to_tech[attr]
+            if tech=='fate':
+                rolls = []
+                for i in range(4):
+                    rolls.append(randint(1,6))
+                s = 0
+                for r in rolls:
+                    if r>4:
+                        s+=1
+                    if r<3:
+                        s-=1
+                msg= f'Фэйт ролл {message.author.mention}: {s} {rolls}'
+                await Hooks.adventure_hook.send(msg)
+            else:
+                heroes = Adventurer.get(owner_id = message.author.id)
+                if heroes.count()==0:
+                    await Hooks.adventure_hook.send('Герой не найден!')
+                elif heroes.count()==1:
+                    hero = heroes.first()
+                    roll = hero.make_check(tech)
+                    await Hooks.adventure_hook.send(f'{hero.name.capitalize()} ({attr.capitalize()}): {roll[0]} ({roll[1]})')
+                else:
+                    msg = "Несколько героев:\n"
+                    i=0
+                    for h in heroes:
+                       msg+=f'{i} {h.name}'
+                    _msg = await Hooks.creation_hook.send('reaction number: - ', wait = True)
+                    Adv.hero_picker_msgs[_msg.id] = _msg
+                    Adv.hero_picker_stats[_msg.id] = (tech,attr)
+                    Adv.creator.add_numbers(_msg,0,heroes.count())
+
+        if message.content.lower().startswith('комната'):
+            if message.author.guild_permissions.manage_roles:
+                room = Room.random()
+                await Hooks.adventure_hook.send(room.public_message())
+                await message.author.send(room.gm_message())
+            else:
+                await Hooks.adventure_hook.send('Недостаточно прав!')
+    elif (message.content.lower().startswith('проверка фэйт') or
+        message.content.lower().startswith('ролл фэйт')):
+            rolls = []
+            for i in range(4):
+                rolls.append(randint(1,6))
+            s = 0
+            for r in rolls:
+                if r>4:
+                    s+=1
+                if r<3:
+                    s-=1
+            msg= f'Фэйт ролл {message.author.mention}: {s} {rolls}'
+            await Hooks.adventure_hook.send(msg)
+
+
+@client.event
+async def on_reaction_add(reaction, user):
+    if Adv.num_test_msg is not None:
+        if reaction.message.id == Adv.num_test_msg.id:
+            await Adv.num_test_msg.edit(content = f'reaction number: {HeroCreator.em_to_num(reaction.emoji)}')
+    if Adv.creator is not None:
+        if Adv.creator.message is not None:
+            if reaction.message.id == Adv.creator.message.id and user.id == Adv.creator.user.id:
+                number  = HeroCreator.em_to_num(reaction.emoji)
+                if number is not None:
+                    await Adv.creator.add_number(number)
+    if reaction.message.id in Adv.hero_picker_msgs:
+        if user == Adv.hero_picker_msgs[reaction.message.id].author:
+            number  = HeroCreator.em_to_num(reaction.emoji)
+            if number is not None:
+                heroes = Adventurer.get(owner_id = user.id)
+                hero = heroes[number]
+                stat = Adv.hero_picker_stats[reaction.message.id]
+                roll = hero.make_check(stat[0])
+                await Hooks.adventure_hook.send(f'{hero.name.capitalize()} ({stat[1].capitalize()}): {roll[0]} ({roll[1]})')
+                Adv.hero_picker_msg.pop(reaction.message.id, None)
+                Adv.hero_picker_stats.pop(reaction.message.id, None)
+
+
+
+
 
 
 
